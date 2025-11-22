@@ -1,143 +1,128 @@
-
-from flask import Flask, request, jsonify, render_template, redirect, url_for
-from flask_sqlalchemy import SQLAlchemy
-import base64
 import os
-import requests
-import json
+import base64
+import uuid
 from datetime import datetime
+from flask import Flask, request, jsonify, send_from_directory
+from flask_sqlalchemy import SQLAlchemy
+from flask_cors import CORS
 
+# ================= CONFIGURACIÓN =================
 app = Flask(__name__)
+CORS(app) # Permite conexiones desde Flutter (Móvil/Web/Emulador)
 
-# Construir una ruta absoluta para el archivo de la base de datos
+# Configuración de base de datos
 basedir = os.path.abspath(os.path.dirname(__file__))
-instance_path = os.path.join(basedir, 'instance')
-
-# Asegurarse de que el directorio 'instance' exista
-if not os.path.exists(instance_path):
-    os.makedirs(instance_path)
-
-# Configuración de la base de datos
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(instance_path, 'denuncias.db')
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'denuncias.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+# Configuración de carpeta de imágenes
+UPLOAD_DIR = os.path.join(basedir, "uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
 db = SQLAlchemy(app)
 
-# Modelo de la base de datos para las denuncias
+# ================= MODELO DE BASE DE DATOS =================
 class Denuncia(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    nombre = db.Column(db.String(100), nullable=False)
-    email = db.Column(db.String(100), nullable=False)
+    correo = db.Column(db.String(120), nullable=False)
     descripcion = db.Column(db.Text, nullable=False)
-    foto = db.Column(db.String(200), nullable=True) # Guardará la ruta de la imagen
-    fecha = db.Column(db.DateTime, default=datetime.utcnow)
+    latitud = db.Column(db.Float, nullable=True)  # Requisito PDF
+    longitud = db.Column(db.Float, nullable=True) # Requisito PDF
+    image_filename = db.Column(db.String(255), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
-    def __repr__(self):
-        return f'<Denuncia {self.id}>'
+    def to_dict(self):
+        # Genera la URL completa para que Flutter pueda descargar la imagen
+        root = request.url_root.rstrip('/')
+        return {
+            "id": self.id,
+            "correo": self.correo,
+            "descripcion": self.descripcion,
+            "ubicacion": {
+                "lat": self.latitud,
+                "lng": self.longitud
+            },
+            "image_url": f"{root}/uploads/{self.image_filename}",
+            "fecha": self.created_at.strftime("%Y-%m-%d %H:%M")
+        }
 
-# Ruta unificada para GET (ver) y POST (crear) denuncias
-@app.route('/denuncias', methods=['GET', 'POST'])
-def handle_denuncias():
-    # --- Lógica para CREAR una denuncia (POST) ---
-    if request.method == 'POST':
-        data = request.get_json()
-        
-        if not data or not all(k in data for k in ["nombre", "email", "descripcion"]):
-            return jsonify({"error": "Faltan datos en la solicitud"}), 400
+# Inicializar la BD al arrancar
+with app.app_context():
+    db.create_all()
 
-        img_b64 = data.get("foto")
-        img_path = None
-        if img_b64:
-            try:
-                if ',' in img_b64:
-                    header, img_b64 = img_b64.split(',', 1)
+# ================= RUTAS (ENDPOINTS) =================
 
-                img_data = base64.b64decode(img_b64)
-                
-                filename = f"denuncia_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-                upload_dir = os.path.join(basedir, 'uploads')
-                if not os.path.exists(upload_dir):
-                    os.makedirs(upload_dir)
-                    
-                img_path = os.path.join(upload_dir, filename)
-                
-                with open(img_path, "wb") as f:
-                    f.write(img_data)
+# 1. RUTA GET: Listar todas las denuncias
+@app.route("/api/denuncias", methods=["GET"])
+def list_denuncias():
+    try:
+        items = Denuncia.query.order_by(Denuncia.id.desc()).all()
+        return jsonify([i.to_dict() for i in items]), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-            except (ValueError, TypeError) as e:
-                return jsonify({"error": f"Error al decodificar la imagen: {e}"}), 400
-
-        try:
-            nueva_denuncia = Denuncia(
-                nombre=data["nombre"],
-                email=data["email"],
-                descripcion=data["descripcion"],
-                foto=img_path,
-                fecha=datetime.utcnow()
-            )
-            db.session.add(nueva_denuncia)
-            db.session.commit()
-            return jsonify({"mensaje": "Denuncia creada con éxito", "id": nueva_denuncia.id}), 201
-
-        except Exception as e:
-            db.session.rollback()
-            return jsonify({"error": f"Error al guardar en la base de datos: {e}"}), 500
-
-    # --- Lógica para VER todas las denuncias (GET) ---
-    if request.method == 'GET':
-        denuncias = Denuncia.query.all()
-        resultado = []
-        for d in denuncias:
-            resultado.append({
-                'id': d.id,
-                'nombre': d.nombre,
-                'email': d.email,
-                'descripcion': d.descripcion,
-                'foto': d.foto,
-                'fecha': d.fecha.isoformat()
-            })
-        return jsonify(resultado)
-
-# Ruta para el formulario de denuncias (CREATE desde web)
-@app.route('/denunciar', methods=['GET', 'POST'])
-def denunciar():
-    if request.method == 'POST':
-        nombre = request.form['nombre']
-        email = request.form['email']
-        descripcion = request.form['descripcion']
-        
-        foto = request.files.get('foto')
-        foto_path = None
-        if foto:
-            filename = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{foto.filename}"
-            upload_dir = os.path.join(basedir, 'static', 'images')
-            if not os.path.exists(upload_dir):
-                os.makedirs(upload_dir)
-            
-            foto_path = os.path.join(upload_dir, filename)
-            foto.save(foto_path)
-        
-        nueva_denuncia = Denuncia(
-            nombre=nombre,
-            email=email,
-            descripcion=descripcion,
-            foto=foto_path
-        )
-        
-        db.session.add(nueva_denuncia)
-        db.session.commit()
-        
-        # Redirigir a la lista de denuncias (ahora apunta a la nueva función)
-        return redirect(url_for('handle_denuncias'))
-
-    return render_template('denunciar.html')
-
-# Ruta para la página de inicio
-@app.route('/')
-def index():
-    return "Servidor Flask para la app de denuncias"
-
-if __name__ == '__main__':
-    with app.app_context():
-        db.create_all()
+# 2. RUTA POST: Crear una nueva denuncia
+@app.route("/api/denuncias", methods=["POST"])
+def create_denuncia():
+    data = request.get_json(silent=True) or {}
     
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    # Validar datos obligatorios
+    correo = data.get("correo")
+    descripcion = data.get("descripcion")
+    img_b64 = data.get("foto") 
+    ubicacion = data.get("ubicacion", {}) # Llega como {"lat": -33..., "lng": -70...}
+
+    if not correo or not descripcion or not img_b64:
+        return jsonify({"error": "Faltan datos obligatorios (correo, descripcion, foto)"}), 400
+
+    # Procesar imagen Base64
+    try:
+        # Limpiar encabezado si viene (data:image/png;base64,...)
+        if "," in img_b64:
+            img_b64 = img_b64.split(",")[1]
+        
+        raw_image = base64.b64decode(img_b64, validate=True)
+        
+        # Generar nombre único
+        filename = f"{uuid.uuid4().hex}.jpg"
+        file_path = os.path.join(UPLOAD_DIR, filename)
+        
+        with open(file_path, "wb") as f:
+            f.write(raw_image)
+            
+    except Exception as e:
+        return jsonify({"error": f"Error procesando imagen: {str(e)}"}), 400
+
+    # Guardar en Base de Datos
+    try:
+        nueva = Denuncia(
+            correo=correo,
+            descripcion=descripcion,
+            latitud=ubicacion.get("lat"),
+            longitud=ubicacion.get("lng"),
+            image_filename=filename
+        )
+        db.session.add(nueva)
+        db.session.commit()
+        return jsonify(nueva.to_dict()), 201
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": f"Error en BD: {str(e)}"}), 500
+
+# 3. RUTA GET ID: Ver detalle de una denuncia (Requisito PDF)
+@app.route("/api/denuncias/<int:id>", methods=["GET"])
+def get_denuncia_detail(id):
+    item = Denuncia.query.get(id)
+    if not item:
+        return jsonify({"error": "Denuncia no encontrada"}), 404
+    return jsonify(item.to_dict()), 200
+
+# 4. RUTA IMAGEN: Servir las fotos guardadas
+@app.route('/uploads/<filename>')
+def serve_image(filename):
+    return send_from_directory(UPLOAD_DIR, filename)
+
+if __name__ == "__main__":
+    # Ejecutar servidor
+    app.run(host="0.0.0.0", port=5000, debug=True)
