@@ -7,6 +7,7 @@
   packages = [
     pkgs.jdk21
     pkgs.unzip
+    pkgs.python3
   ];
   # Sets environment variables in the workspace
   env = {};
@@ -15,11 +16,14 @@
     extensions = [
       "Dart-Code.flutter"
       "Dart-Code.dart-code"
+      "ms-python.python"
     ];
     workspace = {
       # Runs when a workspace is first created with this `dev.nix` file
+      
       onCreate = { };
       # To run something each time the workspace is (re)started, use the `onStart` hook
+      
     };
     # Enable previews and customize configuration
     previews = {
