@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../services/api_service.dart'; // Importamos el servicio
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -9,22 +10,54 @@ class RegisterScreen extends StatefulWidget {
 
 class _RegisterScreenState extends State<RegisterScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _nameCtrl = TextEditingController();
   final _emailCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
   final _confirmCtrl = TextEditingController();
+  bool _isLoading = false; // Para mostrar carga
 
-  void _register() {
+  void _register() async {
     if (_formKey.currentState!.validate()) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Cuenta creada con éxito")));
-      Navigator.pop(context);
+      setState(() => _isLoading = true);
+
+      try {
+        // LLAMADA REAL AL SERVIDOR
+        final success = await ApiService.register(
+            _emailCtrl.text.trim(),
+            _passCtrl.text.trim()
+        );
+
+        if (!mounted) return;
+
+        setState(() => _isLoading = false);
+
+        if (success) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text("Cuenta creada. ¡Ahora inicia sesión!"),
+                backgroundColor: Colors.green,
+              )
+          );
+          Navigator.pop(context); // Volver al login
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text("Error: El correo ya existe o falló la conexión"))
+          );
+        }
+      } catch (e) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(backgroundColor: Colors.transparent, elevation: 0, iconTheme: const IconThemeData(color: Colors.black)),
+      appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          iconTheme: const IconThemeData(color: Colors.black)
+      ),
       body: Padding(
         padding: const EdgeInsets.all(24.0),
         child: SingleChildScrollView(
@@ -37,18 +70,16 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 const Text("Crear Cuenta", style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 30),
 
-                TextFormField(
-                  controller: _nameCtrl,
-                  decoration: const InputDecoration(labelText: "Nombre Completo", border: OutlineInputBorder()),
-                  validator: (v) => v!.isEmpty ? "Requerido" : null,
-                ),
-                const SizedBox(height: 15),
+                // NO PEDIMOS NOMBRE (El backend actual solo usa email/pass para simplificar JWT)
+
                 TextFormField(
                   controller: _emailCtrl,
+                  keyboardType: TextInputType.emailAddress,
                   decoration: const InputDecoration(labelText: "Correo", border: OutlineInputBorder()),
                   validator: (v) => !v!.contains("@") ? "Correo inválido" : null,
                 ),
                 const SizedBox(height: 15),
+
                 TextFormField(
                   controller: _passCtrl,
                   obscureText: true,
@@ -56,6 +87,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   validator: (v) => v!.length < 6 ? "Mínimo 6 caracteres" : null,
                 ),
                 const SizedBox(height: 15),
+
                 TextFormField(
                   controller: _confirmCtrl,
                   obscureText: true,
@@ -64,7 +96,16 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 ),
                 const SizedBox(height: 25),
 
-                ElevatedButton(onPressed: _register, child: const Text("Registrarse")),
+                SizedBox(
+                  width: double.infinity,
+                  height: 50,
+                  child: ElevatedButton(
+                    onPressed: _isLoading ? null : _register,
+                    child: _isLoading
+                        ? const CircularProgressIndicator()
+                        : const Text("REGISTRARSE"),
+                  ),
+                ),
               ],
             ),
           ),
